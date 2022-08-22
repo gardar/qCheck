@@ -74,9 +74,23 @@ elseif( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
 	)
 endif()
 
+### CRC
+add_library(
+	CRC
+	source/CRC/CRC32.cpp
+)
+
+target_include_directories(
+	CRC
+	INTERFACE
+	include/CRC
+)
+
+### qCheck
 add_executable(
 	qCheck
 	source/main.cpp
+	source/qCheck.cpp
 )
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
@@ -84,6 +98,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(
 	qCheck
 	PRIVATE
+	CRC
 	Threads::Threads
 )
 target_include_directories(
@@ -106,12 +121,8 @@ add_executable(
 target_link_libraries(
 	CRC32_test
 	PRIVATE
+	CRC
 	catch
-)
-target_include_directories(
-	CRC32_test
-	PRIVATE
-	include
 )
 
 add_test(CRC32_test CRC32_test)
