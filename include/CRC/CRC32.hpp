@@ -1,13 +1,8 @@
 #pragma once
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <numeric>
 #include <span>
 
-#ifdef __x86_64__
-#include <x86intrin.h>
-#endif
 namespace CRC
 {
 

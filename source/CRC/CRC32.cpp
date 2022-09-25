@@ -1,5 +1,12 @@
 #include <CRC32.hpp>
 
+#include <array>
+#include <numeric>
+
+#ifdef __x86_64__
+#include <x86intrin.h>
+#endif
+
 namespace CRC
 {
 // TODO: This is pretty big, about 16kb total, which is almost
@@ -13,6 +20,7 @@ using CRC32TableT = std::array<std::array<std::uint32_t, 256>, 16>;
 constexpr CRC32TableT CRC32Table(std::uint32_t Polynomial) noexcept
 {
 	CRC32TableT Table = {};
+
 	// Generate main table
 	for( std::size_t i = 0; i < 256; ++i )
 	{
@@ -23,6 +31,7 @@ constexpr CRC32TableT CRC32Table(std::uint32_t Polynomial) noexcept
 		}
 		Table[0][i] = CRC;
 	}
+
 	// Generate additional tables based on the main table
 	for( std::size_t i = 0; i < 256; ++i )
 	{
@@ -54,14 +63,14 @@ constexpr CRC32TableT CRC32Table(std::uint32_t Polynomial) noexcept
 template<Polynomial Poly>
 struct CRC32TableStatic
 {
-	const CRC32TableT& operator()() const
+	const CRC32TableT& operator()() const noexcept
 	{
 		static constexpr CRC32TableT Table = CRC32Table(std::uint32_t(Poly));
 		return Table;
 	}
 };
 
-const CRC32TableT& GetCRC32Table(Polynomial Poly)
+static const CRC32TableT& GetCRC32Table(Polynomial Poly) noexcept
 {
 	switch( Poly )
 	{
@@ -95,11 +104,13 @@ inline std::uint32_t _mm256_hxor_epi32(__m256i a)
 constexpr std::uint32_t BitReverse32(std::uint32_t Value)
 {
 	std::uint32_t Reversed = 0;
+
 	for( std::uint32_t BitIndex = 0u; BitIndex < 32u; ++BitIndex )
 	{
 		Reversed = (Reversed << 1u) + (Value & 0b1);
 		Value >>= 1u;
 	}
+
 	return Reversed;
 }
 
@@ -108,6 +119,7 @@ constexpr std::uint64_t
 	KnConstant(std::uint32_t ByteShift, std::uint32_t Polynomial)
 {
 	std::uint32_t Remainder = 1u << 24;
+
 	for( std::size_t i = 5; i <= (ByteShift + 1); ++i )
 	{
 		for( std::int8_t BitIndex = 0; BitIndex < 8; ++BitIndex )
@@ -124,6 +136,7 @@ constexpr std::uint64_t
 			}
 		}
 	}
+
 	return static_cast<std::uint64_t>(BitReverse32(Remainder)) << 1;
 }
 
@@ -132,6 +145,7 @@ constexpr std::uint64_t MuConstant(uint32_t Polynomial)
 {
 	std::uint32_t Remainder = 1u << 24;
 	std::uint32_t Quotient  = 0u;
+
 	for( std::size_t i = 5; i <= 9; ++i )
 	{
 		for( std::int8_t BitIndex = 0; BitIndex < 8; ++BitIndex )
@@ -150,6 +164,7 @@ constexpr std::uint64_t MuConstant(uint32_t Polynomial)
 			}
 		}
 	}
+
 	return (static_cast<std::uint64_t>(BitReverse32(Quotient)) << 1u) | 1;
 }
 
@@ -166,9 +181,9 @@ static_assert(KnConstant(      4, IEEEPOLY) == 0x1DB710640);
 static_assert(MuConstant(         IEEEPOLY) == 0x1F7011641);
 // clang-format on
 
-template<std::uint32_t Polynomial>
-std::uint32_t
-	CRC32_PCLMULQDQ(std::span<const std::byte> Data, std::uint32_t CRC)
+static std::uint32_t CRC32_PCLMULQDQ(
+	std::span<const std::byte> Data, std::uint32_t CRC,
+	std::uint32_t Polynomial)
 {
 
 	__m128i CRCVec0 = reinterpret_cast<const __m128i*>(Data.data())[0];
@@ -290,6 +305,8 @@ std::uint32_t Checksum(
 	std::span<const std::byte> Data, std::uint32_t InitialValue,
 	Polynomial Poly)
 {
+	const std::uint32_t Polynomial32 = std::uint32_t(Poly);
+
 	const auto& Table = GetCRC32Table(Poly);
 
 	std::uint32_t CRC = ~InitialValue;
@@ -299,12 +316,12 @@ std::uint32_t Checksum(
 	{
 		if( Data.size() % 16 == 0 )
 		{
-			return ~CRC32_PCLMULQDQ<BitReverse32(Polynomial32)>(Data, CRC);
+			return ~CRC32_PCLMULQDQ(Data, CRC, BitReverse32(Polynomial32));
 		}
 		else
 		{
-			CRC = CRC32_PCLMULQDQ<BitReverse32(Polynomial32)>(Data, CRC);
-			return Checksum<Polynomial32>(Data.last(Data.size() % 16), ~CRC);
+			CRC = CRC32_PCLMULQDQ(Data, CRC, BitReverse32(Polynomial32));
+			return Checksum(Data.last(Data.size() % 16), ~CRC, Poly);
 		}
 	}
 #endif
@@ -319,22 +336,23 @@ std::uint32_t Checksum(
 			~0, ~0, ~0, 2, ~0, ~0, ~0, 1, ~0, ~0, ~0, 0);
 		// Offset into the multi-dimensional array
 		const __m512i ArrayOffset = _mm512_set_epi32(
-			(sizeof(typename decltype(Table)::value_type) / 4) * 0,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 1,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 2,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 3,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 4,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 5,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 6,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 7,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 8,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 9,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 10,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 11,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 12,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 13,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 14,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 15);
+			(sizeof(CRC32TableT::value_type) / 4) * 0,
+			(sizeof(CRC32TableT::value_type) / 4) * 1,
+			(sizeof(CRC32TableT::value_type) / 4) * 2,
+			(sizeof(CRC32TableT::value_type) / 4) * 3,
+			(sizeof(CRC32TableT::value_type) / 4) * 4,
+			(sizeof(CRC32TableT::value_type) / 4) * 5,
+			(sizeof(CRC32TableT::value_type) / 4) * 6,
+			(sizeof(CRC32TableT::value_type) / 4) * 7,
+			(sizeof(CRC32TableT::value_type) / 4) * 8,
+			(sizeof(CRC32TableT::value_type) / 4) * 9,
+			(sizeof(CRC32TableT::value_type) / 4) * 10,
+			(sizeof(CRC32TableT::value_type) / 4) * 11,
+			(sizeof(CRC32TableT::value_type) / 4) * 12,
+			(sizeof(CRC32TableT::value_type) / 4) * 13,
+			(sizeof(CRC32TableT::value_type) / 4) * 14,
+			(sizeof(CRC32TableT::value_type) / 4) * 15);
+
 		for( ; Data.size() / 16; )
 		{
 			// Load in 8 bytes
@@ -404,16 +422,18 @@ std::uint32_t Checksum(
 		const __m256i ByteIndex = _mm256_set_epi8(
 			~0, ~0, ~0, 7, ~0, ~0, ~0, 6, ~0, ~0, ~0, 5, ~0, ~0, ~0, 4, ~0, ~0,
 			~0, 3, ~0, ~0, ~0, 2, ~0, ~0, ~0, 1, ~0, ~0, ~0, 0);
+
 		// Offset into the multi-dimensional array
 		const __m256i ArrayOffset = _mm256_set_epi32(
-			(sizeof(typename decltype(Table)::value_type) / 4) * 0,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 1,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 2,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 3,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 4,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 5,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 6,
-			(sizeof(typename decltype(Table)::value_type) / 4) * 7);
+			(sizeof(CRC32TableT::value_type) / 4) * 0,
+			(sizeof(CRC32TableT::value_type) / 4) * 1,
+			(sizeof(CRC32TableT::value_type) / 4) * 2,
+			(sizeof(CRC32TableT::value_type) / 4) * 3,
+			(sizeof(CRC32TableT::value_type) / 4) * 4,
+			(sizeof(CRC32TableT::value_type) / 4) * 5,
+			(sizeof(CRC32TableT::value_type) / 4) * 6,
+			(sizeof(CRC32TableT::value_type) / 4) * 7);
+
 		for( ; Data.size() / 8; Data.subspan(8) )
 		{
 			// Load in 8 bytes
