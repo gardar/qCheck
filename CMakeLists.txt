@@ -82,7 +82,7 @@ add_library(
 
 target_include_directories(
 	CRC
-	INTERFACE
+	PUBLIC
 	include/CRC
 )
 
